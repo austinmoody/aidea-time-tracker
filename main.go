@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,12 +15,17 @@ import (
 
 // TimeEntry represents a single time tracking entry
 type TimeEntry struct {
-	ID          string
-	Timespan    string
-	Description string
-	Task        string
-	Jira        string
-	Confidence  string
+	ID          string `json:"id,omitempty"`
+	Timespan    string `json:"timespan,omitempty"`
+	Description string `json:"description"`
+	Task        string `json:"task,omitempty"`
+	Jira        string `json:"jira,omitempty"`
+	Confidence  string `json:"confidence,omitempty"`
+}
+
+// TimeEntryRequest represents the JSON request for creating a time entry
+type TimeEntryRequest struct {
+	Description string `json:"description"`
 }
 
 func main() {
@@ -40,16 +47,31 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse form data
-	err := r.ParseForm()
-	if err != nil {
-		http.Error(w, "Error parsing form data", http.StatusBadRequest)
+	// Check content type
+	contentType := r.Header.Get("Content-Type")
+	if contentType != "application/json" {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
-	// Get description from form
-	description := r.FormValue("description")
-	if description == "" {
+	// Read request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Error reading request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Parse JSON request
+	var request TimeEntryRequest
+	err = json.Unmarshal(body, &request)
+	if err != nil {
+		http.Error(w, "Error parsing JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if request.Description == "" {
 		http.Error(w, "Description is required", http.StatusBadRequest)
 		return
 	}
@@ -57,7 +79,7 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 	// Create a new time entry
 	entry := TimeEntry{
 		ID:          uuid.New().String(),
-		Description: description,
+		Description: request.Description,
 		// Other fields are left empty as specified
 	}
 
@@ -68,9 +90,16 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Return success response
+	// Create JSON response
+	response := map[string]string{
+		"id":      entry.ID,
+		"message": "Time entry saved successfully",
+	}
+
+	// Send JSON response
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintf(w, "Time entry saved successfully with ID: %s", entry.ID)
+	json.NewEncoder(w).Encode(response)
 }
 
 func saveToCSV(entry TimeEntry) error {

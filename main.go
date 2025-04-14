@@ -21,6 +21,7 @@ type TimeEntry struct {
 	Task        string `json:"task,omitempty"`
 	Jira        string `json:"jira,omitempty"`
 	Confidence  string `json:"confidence,omitempty"`
+	Categorized bool   `json:"categorized,omitempty"`
 }
 
 // TimeEntryRequest represents the JSON request for creating a time entry
@@ -80,6 +81,7 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 	entry := TimeEntry{
 		ID:          uuid.New().String(),
 		Description: request.Description,
+		Categorized: false, // Default to false as requested
 		// Other fields are left empty as specified
 	}
 
@@ -125,13 +127,18 @@ func saveToCSV(entry TimeEntry) error {
 
 	// Write headers if file was just created
 	if !fileExists {
-		headers := []string{"id", "timespan", "description", "task", "jira", "confidence"}
+		headers := []string{"id", "timespan", "description", "task", "jira", "confidence", "categorized"}
 		if err := writer.Write(headers); err != nil {
 			return fmt.Errorf("error writing headers: %v", err)
 		}
 	}
 
 	// Write the entry as a CSV record
+	categorizedStr := "false"
+	if entry.Categorized {
+		categorizedStr = "true"
+	}
+
 	record := []string{
 		entry.ID,
 		entry.Timespan,
@@ -139,6 +146,7 @@ func saveToCSV(entry TimeEntry) error {
 		entry.Task,
 		entry.Jira,
 		entry.Confidence,
+		categorizedStr,
 	}
 
 	if err := writer.Write(record); err != nil {

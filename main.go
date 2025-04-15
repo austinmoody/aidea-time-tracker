@@ -19,6 +19,7 @@ type TimeEntry struct {
 	Timespan    string `json:"timespan,omitempty"`
 	Description string `json:"description"`
 	Task        string `json:"task,omitempty"`
+	TaskReason  string `json:"task_reason,omitempty"`
 	Jira        string `json:"jira,omitempty"`
 	Confidence  string `json:"confidence,omitempty"`
 	Categorized bool   `json:"categorized,omitempty"`
@@ -30,8 +31,20 @@ type TimeEntryRequest struct {
 }
 
 func main() {
+	// Check if we're running the test command
+	if len(os.Args) > 1 && os.Args[0] == "test_ollama" {
+		// We're running the test binary
+		if len(os.Args) < 2 {
+			fmt.Println("Usage: ./test_ollama \"Your task description here\"")
+			os.Exit(1)
+		}
+		TestCategorize(os.Args[1])
+		return
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/save_time", saveTimeHandler)
+	mux.HandleFunc("/api/v1/categorize", categorizeHandler)
 
 	// Start the server
 	fmt.Println("Server starting on :8080...")
@@ -127,7 +140,7 @@ func saveToCSV(entry TimeEntry) error {
 
 	// Write headers if file was just created
 	if !fileExists {
-		headers := []string{"id", "timespan", "description", "task", "jira", "confidence", "categorized"}
+		headers := []string{"id", "timespan", "description", "task", "task_reason", "jira", "confidence", "categorized"}
 		if err := writer.Write(headers); err != nil {
 			return fmt.Errorf("error writing headers: %v", err)
 		}
@@ -144,6 +157,7 @@ func saveToCSV(entry TimeEntry) error {
 		entry.Timespan,
 		entry.Description,
 		entry.Task,
+		entry.TaskReason,
 		entry.Jira,
 		entry.Confidence,
 		categorizedStr,
@@ -154,4 +168,161 @@ func saveToCSV(entry TimeEntry) error {
 	}
 
 	return nil
+}
+
+func categorizeHandler(w http.ResponseWriter, r *http.Request) {
+	// Only allow POST method
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Generate filename based on current date
+	currentDate := time.Now().Format("20060102") // Format for YYYYMMDD
+	filename := fmt.Sprintf("aidea_time_tracking_%s.csv", currentDate)
+
+	// Check if file exists
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		http.Error(w, fmt.Sprintf("No data file found for today (%s)", filename), http.StatusNotFound)
+		return
+	}
+
+	// Open the CSV file for reading and writing
+	file, err := os.OpenFile(filename, os.O_RDWR, 0644)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error opening file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// Read all records from the CSV file
+	reader := csv.NewReader(file)
+	records, err := reader.ReadAll()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error reading CSV: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if len(records) <= 1 {
+		http.Error(w, "No time entries found", http.StatusNotFound)
+		return
+	}
+
+	// Get headers
+	headers := records[0]
+
+	// Find index of each column
+	idIdx := -1
+	descIdx := -1
+	taskIdx := -1
+	reasonIdx := -1
+	jiraIdx := -1
+	confidenceIdx := -1
+	categorizedIdx := -1
+
+	for i, header := range headers {
+		switch header {
+		case "id":
+			idIdx = i
+		case "description":
+			descIdx = i
+		case "task":
+			taskIdx = i
+		case "task_reason":
+			reasonIdx = i
+		case "jira":
+			jiraIdx = i
+		case "confidence":
+			confidenceIdx = i
+		case "categorized":
+			categorizedIdx = i
+		}
+	}
+
+	// Check if we found all required columns
+	if idIdx == -1 || descIdx == -1 || taskIdx == -1 || reasonIdx == -1 ||
+		jiraIdx == -1 || confidenceIdx == -1 || categorizedIdx == -1 {
+		http.Error(w, "CSV file does not have the required columns", http.StatusInternalServerError)
+		return
+	}
+
+	// Process uncategorized entries
+	uncategorizedCount := 0
+	successCount := 0
+	errors := []string{}
+
+	for i, record := range records {
+		// Skip header row
+		if i == 0 {
+			continue
+		}
+
+		// Check if entry is already categorized
+		if record[categorizedIdx] == "true" {
+			continue
+		}
+
+		uncategorizedCount++
+
+		// Get the description
+		description := record[descIdx]
+		if description == "" {
+			errors = append(errors, fmt.Sprintf("Entry ID %s has no description", record[idIdx]))
+			continue
+		}
+
+		// Call Ollama to categorize the description
+		categoryResp, err := categorizeDescription(description)
+		if err != nil {
+			errors = append(errors, fmt.Sprintf("Error categorizing entry ID %s: %v", record[idIdx], err))
+			continue
+		}
+
+		// Update the record with the category information
+		record[taskIdx] = categoryResp.Task
+		record[reasonIdx] = categoryResp.Reason
+		record[jiraIdx] = categoryResp.Jira
+		record[confidenceIdx] = categoryResp.Confidence
+		record[categorizedIdx] = "true"
+
+		// Update the record in the records slice
+		records[i] = record
+		successCount++
+	}
+
+	// If no uncategorized entries were found
+	if uncategorizedCount == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "No uncategorized entries found",
+		})
+		return
+	}
+
+	// Write the updated records back to the file
+	file.Seek(0, 0)
+	file.Truncate(0)
+	writer := csv.NewWriter(file)
+	err = writer.WriteAll(records)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error writing updated CSV: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writer.Flush()
+
+	// Create response
+	response := map[string]interface{}{
+		"total_uncategorized": uncategorizedCount,
+		"success_count":       successCount,
+		"error_count":         len(errors),
+	}
+
+	if len(errors) > 0 {
+		response["errors"] = errors
+	}
+
+	// Send JSON response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
 }

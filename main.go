@@ -214,6 +214,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 	// Find index of each column
 	idIdx := -1
 	descIdx := -1
+	timespanIdx := -1
 	taskIdx := -1
 	reasonIdx := -1
 	jiraIdx := -1
@@ -226,6 +227,8 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 			idIdx = i
 		case "description":
 			descIdx = i
+		case "timespan":
+			timespanIdx = i
 		case "task":
 			taskIdx = i
 		case "task_reason":
@@ -240,7 +243,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if we found all required columns
-	if idIdx == -1 || descIdx == -1 || taskIdx == -1 || reasonIdx == -1 ||
+	if idIdx == -1 || descIdx == -1 || timespanIdx == -1 || taskIdx == -1 || reasonIdx == -1 ||
 		jiraIdx == -1 || confidenceIdx == -1 || categorizedIdx == -1 {
 		http.Error(w, "CSV file does not have the required columns", http.StatusInternalServerError)
 		return
@@ -282,6 +285,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 		record[taskIdx] = categoryResp.Task
 		record[reasonIdx] = categoryResp.Reason
 		record[jiraIdx] = categoryResp.Jira
+		record[timespanIdx] = categoryResp.Timespan
 		record[confidenceIdx] = categoryResp.Confidence
 		record[categorizedIdx] = "true"
 

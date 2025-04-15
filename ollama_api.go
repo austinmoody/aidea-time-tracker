@@ -29,7 +29,7 @@ type OllamaResponse struct {
 type CategoryResponse struct {
 	Task       string `json:"task"`
 	Jira       string `json:"jira"`
-	Time       string `json:"time"`
+	Timespan   string `json:"timespan"`
 	Confidence string `json:"confidence"`
 	Reason     string `json:"reason"`
 }
@@ -158,7 +158,7 @@ func TestCategorize(description string) {
 	fmt.Println("\nSuccessfully categorized:")
 	fmt.Printf("Task: %s\n", result.Task)
 	fmt.Printf("Jira: %s\n", result.Jira)
-	fmt.Printf("Time: %s\n", result.Time)
+	fmt.Printf("Timespan: %s\n", result.Timespan)
 	fmt.Printf("Confidence: %s\n", result.Confidence)
 	fmt.Printf("Reason: %s\n", result.Reason)
 }

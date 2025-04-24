@@ -36,12 +36,14 @@ type CategoryResponse struct {
 
 func categorizeDescription(description string) (*CategoryResponse, error) {
 	ollamaURL := "http://localhost:11434/api/generate"
-	modelName := "gemma3"
+	modelName := "aidea-categorizer"
 
-	systemPrompt, err := readSystemPrompt()
-	if err != nil {
-		return nil, fmt.Errorf("error reading system prompt: %w", err)
-	}
+	// Not reading systemPrompt as I have that built into my Ollama model now
+	systemPrompt := ""
+	//systemPrompt, err := readSystemPrompt()
+	//if err != nil {
+	//	return nil, fmt.Errorf("error reading system prompt: %w", err)
+	//}
 
 	request := OllamaRequest{
 		Model:       modelName,

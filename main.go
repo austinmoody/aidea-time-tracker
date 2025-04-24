@@ -94,8 +94,7 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 	entry := TimeEntry{
 		ID:          uuid.New().String(),
 		Description: request.Description,
-		Categorized: false, // Default to false as requested
-		// Other fields are left empty as specified
+		Categorized: false,
 	}
 
 	// Save to CSV

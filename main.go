@@ -13,37 +13,21 @@ import (
 	"github.com/google/uuid"
 )
 
-// TimeEntry represents a single time tracking entry
-type TimeEntry struct {
-	ID          string `json:"id,omitempty"`
-	Timespan    string `json:"timespan,omitempty"`
-	Description string `json:"description"`
-	Task        string `json:"task,omitempty"`
-	TaskReason  string `json:"task_reason,omitempty"`
-	Jira        string `json:"jira,omitempty"`
-	Confidence  string `json:"confidence,omitempty"`
-	Categorized bool   `json:"categorized,omitempty"`
-}
-
-// TimeEntryRequest represents the JSON request for creating a time entry
-type TimeEntryRequest struct {
-	Description string `json:"description"`
+type ActivityEntry struct {
+	Id                   string `json:"id,omitempty"`
+	Description          string `json:"description"`
+	Category             string `json:"category,omitempty"`
+	Jira                 string `json:"jira,omitempty"`
+	ConfidenceScore      string `json:"confidence_score,omitempty"`
+	ClassificationReason string `json:"classification_reason,omitempty"`
+	Categorized          bool   `json:"categorized,omitempty"`
+	Duration             string `json:"duration,omitempty"`
 }
 
 func main() {
-	// Check if we're running the test command
-	if len(os.Args) > 1 && os.Args[0] == "test_ollama" {
-		// We're running the test binary
-		if len(os.Args) < 2 {
-			fmt.Println("Usage: ./test_ollama \"Your task description here\"")
-			os.Exit(1)
-		}
-		TestCategorize(os.Args[1])
-		return
-	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/save_time", saveTimeHandler)
+	mux.HandleFunc("/api/v1/activity", activityHandler)
 	mux.HandleFunc("/api/v1/categorize", categorizeHandler)
 
 	// Start the server
@@ -54,7 +38,7 @@ func main() {
 	}
 }
 
-func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
+func activityHandler(w http.ResponseWriter, r *http.Request) {
 	// Only allow POST method
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -77,7 +61,7 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	// Parse JSON request
-	var request TimeEntryRequest
+	var request ActivityEntry
 	err = json.Unmarshal(body, &request)
 	if err != nil {
 		http.Error(w, "Error parsing JSON: "+err.Error(), http.StatusBadRequest)
@@ -90,15 +74,11 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a new time entry
-	entry := TimeEntry{
-		ID:          uuid.New().String(),
-		Description: request.Description,
-		Categorized: false,
-	}
+	// Set id
+	request.Id = uuid.New().String()
 
 	// Save to CSV
-	err = saveToCSV(entry)
+	err = saveToCSV(request)
 	if err != nil {
 		http.Error(w, "Error saving data: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -106,7 +86,7 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create JSON response
 	response := map[string]string{
-		"id":      entry.ID,
+		"id":      request.Id,
 		"message": "Time entry saved successfully",
 	}
 
@@ -116,18 +96,18 @@ func saveTimeHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-func saveToCSV(entry TimeEntry) error {
+func saveToCSV(entry ActivityEntry) error {
 	// Generate filename based on current date
 	currentDate := time.Now().Format("20060102") // Format for YYYYMMDD
 	filename := fmt.Sprintf("aidea_time_tracking_%s.csv", currentDate)
 
-	// Check if file exists to determine if we need to write headers
+	// Check if the file exists to determine if we need to write headers
 	fileExists := false
 	if _, err := os.Stat(filename); err == nil {
 		fileExists = true
 	}
 
-	// Open file in append mode or create if it doesn't exist
+	// Open file append mode or create if it doesn't exist
 	file, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("couldn't open file: %v", err)
@@ -137,9 +117,9 @@ func saveToCSV(entry TimeEntry) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	// Write headers if file was just created
+	// Write headers if the file was just created
 	if !fileExists {
-		headers := []string{"id", "timespan", "description", "task", "task_reason", "jira", "confidence", "categorized"}
+		headers := []string{"id", "duration", "description", "category", "reason", "jira", "confidence", "categorized"}
 		if err := writer.Write(headers); err != nil {
 			return fmt.Errorf("error writing headers: %v", err)
 		}
@@ -152,13 +132,13 @@ func saveToCSV(entry TimeEntry) error {
 	}
 
 	record := []string{
-		entry.ID,
-		entry.Timespan,
+		entry.Id,
+		entry.Duration,
 		entry.Description,
-		entry.Task,
-		entry.TaskReason,
+		entry.Category,
+		entry.ClassificationReason,
 		entry.Jira,
-		entry.Confidence,
+		entry.ConfidenceScore,
 		categorizedStr,
 	}
 
@@ -180,7 +160,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 	currentDate := time.Now().Format("20060102") // Format for YYYYMMDD
 	filename := fmt.Sprintf("aidea_time_tracking_%s.csv", currentDate)
 
-	// Check if file exists
+	// Check if the file exists
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		http.Error(w, fmt.Sprintf("No data file found for today (%s)", filename), http.StatusNotFound)
 		return
@@ -226,11 +206,11 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 			idIdx = i
 		case "description":
 			descIdx = i
-		case "timespan":
+		case "duration":
 			timespanIdx = i
-		case "task":
+		case "category":
 			taskIdx = i
-		case "task_reason":
+		case "reason":
 			reasonIdx = i
 		case "jira":
 			jiraIdx = i
@@ -251,7 +231,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 	// Process uncategorized entries
 	uncategorizedCount := 0
 	successCount := 0
-	errors := []string{}
+	var errors []string
 
 	for i, record := range records {
 		// Skip header row
@@ -288,7 +268,7 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 		record[confidenceIdx] = categoryResp.Confidence
 		record[categorizedIdx] = "true"
 
-		// Update the record in the records slice
+		// Update the record in the slice
 		records[i] = record
 		successCount++
 	}

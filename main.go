@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,21 +26,59 @@ type ActivityEntry struct {
 	Duration             string `json:"duration,omitempty"`
 }
 
+type MatchResult struct {
+	Rule       ActivityRule
+	Score      float64
+	Confidence string
+}
+
+type Server struct {
+	ruleConfig RuleConfig
+}
+
 func main() {
 
+	// Read Activity Rules & Generate Embeddings
+	ruleFile, err := os.ReadFile("activity_rules.json")
+	if err != nil {
+		fmt.Printf("Error reading rule file: %v\n", err)
+		os.Exit(1)
+	}
+
+	var config RuleConfig
+	if err := json.Unmarshal(ruleFile, &config); err != nil {
+		fmt.Printf("Error parsing config: %v\n", err)
+		os.Exit(1)
+	}
+
+	for i, rule := range config.Rules {
+		if len(rule.Embedding) == 0 {
+			embedding, err := getEmbedding(rule.Description)
+			if err != nil {
+				fmt.Printf("Error generating embedding for rule %s: %v\n", rule.ID, err)
+				os.Exit(1)
+			}
+			config.Rules[i].Embedding = embedding
+		}
+	}
+
+	server := &Server{
+		config,
+	}
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/activity", activityHandler)
-	mux.HandleFunc("/api/v1/categorize", categorizeHandler)
+	mux.HandleFunc("/api/v1/activity", server.activityHandler)
+	mux.HandleFunc("/api/v1/categorize", server.categorizeHandler)
 
 	// Start the server
 	fmt.Println("Server starting on :8080...")
-	err := http.ListenAndServe(":8080", mux)
+	err = http.ListenAndServe(":8080", mux)
 	if err != nil {
 		log.Fatal("ListenAndServe: ", err)
 	}
 }
 
-func activityHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) activityHandler(w http.ResponseWriter, r *http.Request) {
 	// Only allow POST method
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -149,7 +189,8 @@ func saveToCSV(entry ActivityEntry) error {
 	return nil
 }
 
-func categorizeHandler(w http.ResponseWriter, r *http.Request) {
+func (s *Server) categorizeHandler(w http.ResponseWriter, r *http.Request) {
+
 	// Only allow POST method
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -254,6 +295,8 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Call Ollama to categorize the description
+		categorizeByEmbedding, err := categorizeByEmbedding(description, s.ruleConfig.Rules)
+		log.Printf(categorizeByEmbedding.Jira)
 		categoryResp, err := categorizeDescription(description)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("Error categorizing entry ID %s: %v", record[idIdx], err))
@@ -308,4 +351,91 @@ func categorizeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
+}
+
+func categorizeByEmbedding(input string, rules []ActivityRule) (*CategoryResponse, error) {
+	inputEmbedding, err := getEmbedding(input)
+	if err != nil {
+		fmt.Printf("Error generating embedding for input: %v\n", err)
+		os.Exit(1)
+	}
+
+	closestMatch := findCloseMatch(inputEmbedding, rules)
+
+	response := CategoryResponse{
+		Task:       closestMatch.Rule.Jira,
+		Jira:       closestMatch.Rule.Jira,
+		Confidence: closestMatch.Confidence,
+	}
+
+	return &response, nil
+
+}
+
+func findCloseMatch(embedding []float64, rules []ActivityRule) MatchResult {
+	var results []MatchResult
+
+	for _, rule := range rules {
+		score := cosineSimilarity(embedding, rule.Embedding)
+		confidence := scoreToConfidence(score)
+
+		results = append(results, MatchResult{
+			Rule:       rule,
+			Score:      score,
+			Confidence: confidence,
+		})
+	}
+
+	// Sort by score, highest first
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	// Return the best match
+	if len(results) > 0 {
+		return results[0]
+	}
+
+	// Default ? TODO think about this...
+	// Maybe come up with an "unknown" rule to fall back to
+	return MatchResult{
+		Rule:       ActivityRule{ID: "1", Jira: "FEDS-132"},
+		Score:      0,
+		Confidence: "F",
+	}
+}
+
+func cosineSimilarity(a, b []float64) float64 {
+	var dotProduct float64
+	var normA float64
+	var normB float64
+
+	for i := 0; i < len(a); i++ {
+		dotProduct += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	normA = math.Sqrt(normA)
+	normB = math.Sqrt(normB)
+
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+
+	return dotProduct / (normA * normB)
+}
+
+func scoreToConfidence(score float64) string {
+	if score >= 0.9 {
+		return "A"
+	} else if score >= 0.8 {
+		return "B"
+	} else if score >= 0.7 {
+		return "C"
+	} else if score >= 0.6 {
+		return "D"
+	} else {
+		return "F"
+	}
 }

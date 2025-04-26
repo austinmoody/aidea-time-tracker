@@ -43,10 +43,12 @@ func categorizeDescription(description string) (*CategoryResponse, error) {
 		return nil, fmt.Errorf("error reading system prompt: %w", err)
 	}
 
+	prompt := fmt.Sprintf(systemPrompt, description)
+
 	request := OllamaRequest{
-		Model:       modelName,
-		Prompt:      description,
-		System:      systemPrompt,
+		Model:  modelName,
+		Prompt: prompt,
+		//System:      systemPrompt,
 		Stream:      false,
 		MaxTokens:   2000,
 		Temperature: 0.7,
